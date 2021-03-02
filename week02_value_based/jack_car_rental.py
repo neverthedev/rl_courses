@@ -3,17 +3,7 @@ from math import factorial, exp
 from scipy.stats import poisson
 from pdb import set_trace as debugger
 
-np.set_printoptions(linewidth= 100)
-
-# inspect(np.flip(policy, axis = 0))
-def inspect(array):
-  res = []
-  for i in array:
-    res.append(', '.join(map(format, i)))
-  print("\n".join(res))
-
-def format(number):
-  return "{0:3d}".format(number)
+np.set_printoptions(linewidth = 250, precision = 3)
 
 l1_places = 20
 l2_places = 20
@@ -36,112 +26,114 @@ ret_probs2 =  np.array([poisson.pmf(x, ret_mu2) for x in range(l2_places + 1)])
 # Initial policy is not to move anything anywhere at night
 policy = np.zeros((l1_places + 1, l2_places + 1), dtype = np.int32)
 # Initialize state values arbitrary
-states = np.zeros((l1_places + 1, l2_places + 1))
+state_values = np.zeros((l1_places + 1, l2_places + 1))
 
-# Run states value - policy update iterations
-for t in range(10):
-  print("##########    Iteration %2d    ##########" % t)
-  delta = 100
-  exp_return = 0
+def get_transition_values(state_values):
+  return_transition_values = np.zeros(state_values.shape)
 
-  # Evaluate strategy
-  while delta > 1.0:
-    rent_transions_values = np.zeros(states.shape)
+  for i in range(state_values.shape[0]):
+    for j in range(state_values.shape[1]):
+      # Probabilities to end up with [l, l+1, l+2,..., l_places] cars after cars returned
+      l1_ret_probs = ret_probs1[:state_values.shape[0] - i - 1]
+      l1_ret_probs = np.append(l1_ret_probs, [1 - l1_ret_probs.sum()])
 
-    for i in range(states.shape[0]):
-      for j in range(states.shape[1]):
+      l2_ret_probs = ret_probs2[:state_values.shape[1] - j - 1]
+      l2_ret_probs = np.append(l2_ret_probs, [1 - l2_ret_probs.sum()])
 
-        # Probabilities to end up with [l, l-1, l-2,..., 0] cars from given state
-        l1_rent_probs = np.append(rent_probs1[:i], [1 - rent_probs1[:i].sum()])
-        l2_rent_probs = np.append(rent_probs2[:j], [1 - rent_probs2[:j].sum()])
-        # Rewards to receive ending up with [l, l-1, l-2, ..., 0] cars from given state
-        rewards1 = rent_cost * rewards[:i + 1]
-        rewards2 = rent_cost * rewards[:j + 1]
+      # Matrix of transition probabilities (in each possible state)
+      ret_probs = l1_ret_probs.reshape(-1, 1) * l2_ret_probs.reshape(1, -1)
 
-        # Matrix of transition probabilities
-        t_probs = l1_rent_probs.reshape(i + 1, 1) * l2_rent_probs.reshape(1, j + 1)
-        # Matrix of rewards
-        t_rewards = rewards1.reshape(i + 1, 1) + \
-                    rewards2.reshape(1, j + 1)
+      # State values without cars return factor
+      return_transition_values[i, j] = (state_values[i:,j:] * ret_probs).sum() * discount_rate
 
+  rent_transition_values = np.zeros(state_values.shape)
 
-        # Take subset of states available for transition
-        t_states = np.flip(states[:i + 1, :j + 1], axis = (0,1))
+  for i in range(state_values.shape[0]):
+    for j in range(state_values.shape[1]):
+      # Probabilities to end up with [l, l-1, l-2,..., 0] cars from given state after cars rented
+      l1_rent_probs = np.append(rent_probs1[:i], [1 - rent_probs1[:i].sum()])
+      l2_rent_probs = np.append(rent_probs2[:j], [1 - rent_probs2[:j].sum()])
 
-        # Calculate new state value according to policy
-        rent_transions_values[i, j] = (t_rewards * t_probs).sum() + \
-                                      (t_states * t_probs).sum() * discount_rate
+      # Rewards to receive ending up with [l, l-1, l-2, ..., 0] cars from given state
+      rewards1 = rent_cost * rewards[:i + 1]
+      rewards2 = rent_cost * rewards[:j + 1]
 
-    new_states = np.zeros(states.shape)
+      # Matrix of transition probabilities
+      rent_probs = l1_rent_probs.reshape(i + 1, 1) * l2_rent_probs.reshape(1, j + 1)
 
-    for i in range(states.shape[0]):
-      for j in range(states.shape[1]):
-        cars_to_move = policy[i, j]
-        # Number of cars to move from first place to the second one overnight
-        move_cars_cost =  np.abs(cars_to_move) * move_car_cost
+      # Take subset of states available for transition
+      transition_state_values = np.flip(return_transition_values[:i + 1, :j + 1], axis = (0,1))
 
-        l1, l2 = i - cars_to_move , j + cars_to_move
+      # Matrix of rewards
+      transition_rewards = rewards1.reshape(i + 1, 1) + rewards2.reshape(1, j + 1)
 
-        l1_ret_probs = ret_probs1[:states.shape[0] - l1 - 1]
-        l1_ret_probs = np.append(l1_ret_probs, [1 - l1_ret_probs.sum()])
+      # Calculate new state values before cars rent factor
+      rent_transition_values[i, j] = (transition_rewards * rent_probs).sum() + \
+                                     (transition_state_values * rent_probs).sum()
 
-        l2_ret_probs = ret_probs2[:states.shape[1] - l2 - 1]
-        l2_ret_probs = np.append(l2_ret_probs, [1 - l2_ret_probs.sum()])
+  return rent_transition_values
 
-        ret_probs = l1_ret_probs.reshape(-1, 1) * l2_ret_probs.reshape(1, -1)
+def state_under_policy_values(state_values, policy):
+  transition_values = get_transition_values(state_values)
+  new_state_values = np.zeros(state_values.shape)
 
-        new_states[i, j] = (rent_transions_values[l1:,l2:] * ret_probs).sum()  - move_cars_cost
+  for i in range(state_values.shape[0]):
+    for j in range(state_values.shape[1]):
+      cars_to_move = policy[i, j]
+      # Number of cars to move from first place to the second one overnight
+      move_cars_cost =  np.abs(cars_to_move) * move_car_cost
 
-    delta = np.abs((states - new_states).sum())
-    states = new_states
+      # Resulting state
+      l1, l2 = i - cars_to_move , j + cars_to_move
 
-    #print("Delta: %4.4f" % delta)
+      new_state_values[i, j] = transition_values[l1, l2] - move_cars_cost
 
-  print("##########    Expected return: %4.4f    ##########" % \
-    (new_states.sum() / (new_states.shape[0] * new_states.shape[1])))
+  return new_state_values
 
-  # Update strategy greedily
-  for i in range(states.shape[0]):
-    for j in range(states.shape[1]):
+def greedy_policy(state_values):
+  transition_values = get_transition_values(state_values)
+  policy = np.zeros(state_values.shape, dtype = np.int32)
+
+  for i in range(policy.shape[0]):
+    for j in range(policy.shape[1]):
       # Search for the best state within 5 cars move
-      best_state = states[i, j]
+      best_state = transition_values[i, j]
       policy[i, j] = 0
       for k in range(-5, 6):
-        if (i - k >= 0) and (i - k < states.shape[0]) and \
-           (j + k >= 0) and (j + k < states.shape[1]):
+        if (i - k >= 0) and (i - k < policy.shape[0]) and \
+           (j + k >= 0) and (j + k < policy.shape[1]):
 
-          try_state = states[i - k, j + k]
-          if try_state > best_state:
+          try_state = transition_values[i - k, j + k] - np.abs(k) * move_car_cost
+          if try_state >= best_state:
             # If better state value exist - take it as new policy
             best_state = try_state
             policy[i, j] = k
 
-debugger()
-inspect(np.flip(policy, axis = 0))
+  return policy
 
-"""
-Examle of expected policy 
+# Run states values - policy update iterations
+for t in range(100):
+  print("##########    Iteration %2d    ##########" % (t + 1))
+  delta = 100
+  exp_return = 0
 
-[[ 5,  5,  5,  4,  3,  3,  2,  2,  2,  2,  2,  2,  1,  1,  1,  1,  1,  1,  0,  0,  0],
- [ 5,  5,  5,  4,  3,  2,  2,  1,  1,  1,  1,  1,  1,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 5,  5,  5,  4,  3,  2,  1,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 5,  5,  5,  4,  3,  2,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 5,  5,  5,  4,  3,  2,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 5,  5,  5,  4,  3,  2,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 5,  5,  5,  4,  3,  2,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 5,  5,  4,  4,  3,  2,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 5,  5,  4,  3,  3,  2,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 5,  4,  4,  3,  2,  2,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 5,  4,  3,  3,  2,  1,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 4,  4,  3,  2,  2,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 4,  3,  3,  2,  1,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 3,  3,  2,  2,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 2,  2,  2,  1,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 1,  1,  1,  1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
- [ 1,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, -1],
- [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, -1, -1, -1, -1, -1, -1],
- [ 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, -1, -1, -1, -1, -1, -2, -2, -2, -2, -2],
- [ 0,  0,  0,  0,  0,  0,  0,  0,  0, -1, -1, -1, -2, -2, -2, -2, -2, -3, -3, -3, -3],
- [ 0,  0,  0,  0,  0,  0,  0,  0, -1, -1, -2, -2, -2, -3, -3, -3, -3, -3, -4, -4, -4]],
+  # Evaluate strategy
+  while delta > 0.01: # That's quite neat
+    new_state_values = state_under_policy_values(state_values, policy)
+    delta = np.abs((state_values - new_state_values).sum())
+    state_values = new_state_values
 
-"""
+    #print("Delta: %4.4f" % delta)
+
+  # Update strategy greedily
+  new_policy = greedy_policy(state_values)
+
+  # Stop iterating if policy is stable
+  if np.abs((policy - new_policy).sum()) == 0: break
+
+  policy = new_policy
+
+print('Completed in %1d iterations. Final policy:' % (t + 1))
+print(np.flip(policy, axis = 0))
+print('State values:')
+print(np.flip(state_values, axis = 0))
