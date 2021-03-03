@@ -13,6 +13,7 @@ ret_mu1, ret_mu2 = 3, 2
 rent_cost = 10
 move_car_cost = 2.0
 discount_rate = 0.9
+cars_move_limit = 5
 
 # Precalculated customer appearence probabilities for each location
 rent_probs1 = np.array([poisson.pmf(x, rent_mu1) for x in range(l1_places + 1)])
@@ -96,42 +97,75 @@ def greedy_policy(state_values):
 
   for i in range(policy.shape[0]):
     for j in range(policy.shape[1]):
-      # Search for the best state within 5 cars move
-      best_state = transition_values[i, j]
+      # Search for the best state within 5 car moves to get in
+      winning_state_value = transition_values[i, j]
       policy[i, j] = 0
-      for k in range(-5, 6):
+      for k in range(-cars_move_limit, cars_move_limit + 1):
         if (i - k >= 0) and (i - k < policy.shape[0]) and \
            (j + k >= 0) and (j + k < policy.shape[1]):
 
-          try_state = transition_values[i - k, j + k] - np.abs(k) * move_car_cost
-          if try_state >= best_state:
-            # If better state value exist - take it as new policy
-            best_state = try_state
+          _state_value = transition_values[i - k, j + k] - np.abs(k) * move_car_cost
+          if _state_value > winning_state_value:
+            # If better action value exist - take it as new policy
+            winning_state_value = _state_value
             policy[i, j] = k
 
   return policy
 
-# Run states values - policy update iterations
-for t in range(100):
-  print("##########    Iteration %2d    ##########" % (t + 1))
-  delta = 100
-  exp_return = 0
+def policy_itarations(policy, state_values):
+  # Run state values - policy update iterations
+  for t in range(100):
+    print("##########    Iteration %2d    ##########" % (t + 1))
+    delta = 100
 
-  # Evaluate strategy
+    # Evaluate strategy
+    while delta > 0.01: # That's quite neat
+      new_state_values = state_under_policy_values(state_values, policy)
+      delta = np.abs((state_values - new_state_values).sum())
+      state_values = new_state_values
+
+      #print("Delta: %4.4f" % delta)
+
+    # Update strategy greedily
+    new_policy = greedy_policy(state_values)
+
+    # Stop iterating if policy is stable
+    if np.abs((policy - new_policy).sum()) == 0: return policy, state_values, t
+
+    policy = new_policy
+
+def value_itaration(state_values):
+  transition_values = get_transition_values(state_values)
+  new_state_values = np.zeros(state_values.shape)
+
+  for i in range(policy.shape[0]):
+    for j in range(policy.shape[1]):
+      # Search for the best state within 5 car moves to get in
+      new_state_values[i, j] = transition_values[i, j]
+      for k in range(-cars_move_limit, cars_move_limit + 1):
+        if (i - k >= 0) and (i - k < policy.shape[0]) and \
+           (j + k >= 0) and (j + k < policy.shape[1]):
+
+          _state_value = transition_values[i - k, j + k] - np.abs(k) * move_car_cost
+          if _state_value > new_state_values[i, j]:
+            new_state_values[i, j] = _state_value
+
+  return new_state_values
+
+def value_iterations(state_values):
+  delta, t = 100., 0
   while delta > 0.01: # That's quite neat
-    new_state_values = state_under_policy_values(state_values, policy)
+    print("##########    Iteration %2d    ##########, Delta: %3.3f" % (t + 1, delta))
+    new_state_values = value_itaration(state_values)
     delta = np.abs((state_values - new_state_values).sum())
     state_values = new_state_values
+    t += 1
 
-    #print("Delta: %4.4f" % delta)
+  return greedy_policy(state_values), state_values, t
 
-  # Update strategy greedily
-  new_policy = greedy_policy(state_values)
+policy, state_values, t = policy_itarations(policy, state_values)
 
-  # Stop iterating if policy is stable
-  if np.abs((policy - new_policy).sum()) == 0: break
-
-  policy = new_policy
+# policy, state_values, t = value_iterations(state_values)
 
 print('Completed in %1d iterations. Final policy:' % (t + 1))
 print(np.flip(policy, axis = 0))
