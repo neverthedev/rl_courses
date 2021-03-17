@@ -2,23 +2,21 @@ import numpy as np
 import sys, os
 from pdb import set_trace as debugger
 
-
 sys.path.append(os.getcwd())
 
 import random as rand
 
 class PolicyEvaluation:
 
-  def __init__(self):
-    self.filename = '/traces/trace_cut'
+  def __init__(self, filename):
+    self.filename = filename
     self._speedLimit = 5
     self._speedsCount = self._speedLimit * 2 + 1
     self._dropOffPenalty = 100
     self._transitionCost = 1
 
     # Load track schema
-    self.traceFileName = os.getcwd() + self.filename + '.dat'
-    self.schema = np.flip(np.loadtxt(self.traceFileName, dtype=np.int), axis=0)
+    self.schema = np.flip(np.loadtxt(self.filename + '.dat', dtype=np.int), axis=0)
 
     # Initialize state values function with arbitrary values
     self.stateValues = np.zeros(
@@ -27,82 +25,80 @@ class PolicyEvaluation:
     # Generate full set of actions
     self._actionsMatrix = self._getActionsMatrix()
 
+
   def bootstrap(self):
-    policyFileName = self.filename + 'dp.policy.npy'
+    policyFileName = self.filename + '.dp.policy.npy'
     if self.loadFromFile(policyFileName):
-      self.policy = np.zeros(self.stateValues.shape, dtype=np.ndarray)
+      self.policy = np.zeros((*self.stateValues.shape, 2), dtype=np.ndarray)
       self.valueIteration(self.policy)
     else:
       self.findOptimalPolicy()
       self.saveToFile(policyFileName)
 
+
   def saveToFile(self, fileName):
-    fullFilePath = os.getcwd() + fileName
-    np.save(fullFilePath, self.stateValues)
+    np.save(fileName, self.stateValues)
+
 
   def loadFromFile(self, fileName):
-    fullFilePath = os.getcwd() + fileName
     try:
-      self.stateValues = np.load(fullFilePath)
+      self.stateValues = np.load(fileName)
       return True
     except FileNotFoundError as error:
       print("Can't load state-value function from file. Starting itarations...")
       return False
 
+
   def _getActionsMatrix(self):
     incs = [-1, 0, 1]
     return np.array([[ [i, j] for j in incs ] for i in incs])
 
-
   def valueIteration(self, policy = None):
     newStateValues = np.zeros(self.stateValues.shape)
+    newStateValues[:, :, :] = - np.inf
     dropOffActionValue = self._dropOffActionValue()
 
-    for i in range(self.stateValues.shape[0]):
-      for j in range(self.stateValues.shape[1]):
-        # There is actually no state at the side of the track. So no need to calculate
-        #   the next states range for them
-        if self.schema[i, j] == 0: continue
+    for k in range(self.stateValues.shape[2]):
 
-        for k in range(self.stateValues.shape[2]):
+      if policy is not None: policy[:, :, k] = np.array([0,0])
+
+      # Go on to calculate state value of points on the track
+      for action in self._actionsMatrix.reshape(-1, 2):
+        currentSpeed = self._decodeSpeed(k)
+        vSpeed, hSpeed = action + currentSpeed
+
+        if (vSpeed in range(-self._speedLimit, self._speedLimit + 1)) and \
+           (hSpeed in range(-self._speedLimit, self._speedLimit + 1)):
+
+          newSpeed = self._encodeSpeed([vSpeed, hSpeed])
+
+          speedStateValues = self.stateValues[:, :, newSpeed]
+
+          newSpeedStateValues = self._shiftArr(speedStateValues, - vSpeed, - hSpeed, fillWith = 0)
+
+          # Take transition cast for all values
+          newSpeedStateValues -= self._transitionCost
+
+          # Find out which transitions cross borders
+          borderCrossesMatrix = self._borderCrossesMatrix(int(vSpeed), int(hSpeed))
+
+          # Set drop-off value for each state where car hits border during transition
+          newSpeedStateValues[borderCrossesMatrix] = dropOffActionValue
+
+          # Set zero value for off track starting points (as long as they are unreachable anyway)
+          newSpeedStateValues[self.schema == 0] = 0
+
           # Regardles of the speed the value of the terminal state is always zero
-          if self.schema[i, j] == 2:
-            newStateValues[i, j, k] = 0
-            continue
+          newSpeedStateValues[self.schema == 2] = 0
 
-          # Go on to calculate state value of points on the track
-          newStateValues[i, j, k] = - np.inf
+          # Update policy for current speed...
+          policy[newSpeedStateValues > newStateValues[:, :, k], k] = action
 
-          if policy is not None: policy[i, j, k] = np.array([0,0])
-
-          speedsMatrix = self._actionsMatrix + self._decodeSpeed(k)
-          for action in self._actionsMatrix.reshape(-1, 2):
-            currentSpeed = self._decodeSpeed(k)
-            vSpeed, hSpeed = action + currentSpeed
-
-            # Check if the action is possible (speed is not exceeded)
-            if (vSpeed >= -self._speedLimit) and (vSpeed <= self._speedLimit) and \
-               (hSpeed >= -self._speedLimit) and (hSpeed <= self._speedLimit):
-
-              # Calculate the next state given current state and speed
-              nextStateIndex = [i + vSpeed, j + hSpeed, self._encodeSpeed([vSpeed, hSpeed])]
-
-              actionValue = 0
-
-              # Calculate action value given the next state
-              if not self._traceCrossesBorder((i, j), (nextStateIndex[0], nextStateIndex[1])):
-
-                # Agent didn't move over the track boundaries
-                actionValue = self.stateValues[tuple(nextStateIndex)] - self._transitionCost
-              else:
-                # Agent hits the boundary
-                actionValue = dropOffActionValue
-
-              if actionValue > newStateValues[i, j, k]:
-                newStateValues[i, j, k] = actionValue
-                if policy is not None: policy[i, j, k] = action
+          # Update state values for current speed
+          newStateValues[:, :, k] = np.maximum(newStateValues[:, :, k], newSpeedStateValues)
 
     return newStateValues
+
 
   def _borderCrossesMatrix(self, dv, dh):
     res = np.zeros((self.stateValues.shape[0], self.stateValues.shape[1]), dtype=np.bool)
@@ -125,29 +121,6 @@ class PolicyEvaluation:
 
     return res
 
-  def _traceCrossesBorder(self, startPos, endPos):
-    if not endPos[0] in range(self.stateValues.shape[0]) or \
-       not endPos[1] in range(self.stateValues.shape[1]):
-
-      return True
-
-    dv, dh = endPos[0] - startPos[0], endPos[1] - startPos[1]
-
-    if dv != 0:
-      step = 1 if dv >= 0 else -1
-      for v in range(startPos[0] + step, endPos[0] + step, step):
-        h = int(round((dh / dv) * (v - startPos[0])) + startPos[1])
-
-        if self.schema[v, h] == 0: return True
-
-    if dh != 0:
-      step = 1 if endPos[1] >= startPos[1] else -1
-      for h in range(startPos[1] + step, endPos[1] + step, step):
-        v = int(round((dv / dh) * (h - startPos[1])) + startPos[0])
-
-        if self.schema[v, h] == 0: return True
-
-    return False
 
   def _shiftArr(self, arr, dv, dh, fillWith = np.nan):
     result = np.copy(arr)
@@ -199,8 +172,9 @@ class PolicyEvaluation:
     delta, t  = 100, 0
     print('######    Iteration 0   ######')
     while delta > 1.:
-      self.policy = np.zeros(self.stateValues.shape, dtype=np.ndarray)
+      self.policy = np.zeros((*self.stateValues.shape, 2), dtype=np.ndarray)
       newStateValues = self.valueIteration(self.policy)
+
       delta = np.abs((self.stateValues - newStateValues).sum())
       self.stateValues = newStateValues
       t += 1
@@ -208,16 +182,11 @@ class PolicyEvaluation:
 
 
   def getNextAction(self, vPos, hPos, vSpeed, hSpeed):
-    if not hasattr(self, 'policy'):
-      self.findOptimalPolicy()
+    if not hasattr(self, 'policy'): self.bootstrap()
 
     return self.policy[vPos, hPos, self._encodeSpeed([vSpeed, hSpeed])]
 
-
 # Example of usage
-policy = PolicyEvaluation()
-r1 = policy._borderCrossesMatrix(dv, dh)
-
-
+# policy = PolicyEvaluation('traces/trace_cut')
 # policy.bootstrap()
-# print(policy.getNextAction(0, 5, 0, 0)[0])
+# print(policy.getNextAction(0, 5, 0, 0))

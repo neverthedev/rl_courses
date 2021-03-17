@@ -9,10 +9,7 @@ class Race:
   def __init__(self, traceFile=None, visualize=False):
     self.visualize = visualize
 
-    if traceFile:
-      self.traceFileName = traceFile
-    else:
-      self.traceFileName = 'traces/trace_big.dat'
+    self.traceFileName = traceFile + '.dat'
 
     if self.loadTrace():
       self.setRandomInitialState()
@@ -25,7 +22,7 @@ class Race:
       self._height, self._width = self.schema.shape
       return True
     else:
-      self._height, self._width = 50, 150
+      self._height, self._width = 50, 20
       self.schema = np.zeros((self._height, self._width), dtype=np.int)
       return False
 
