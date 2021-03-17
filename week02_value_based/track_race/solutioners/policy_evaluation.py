@@ -53,6 +53,7 @@ class PolicyEvaluation:
     incs = [-1, 0, 1]
     return np.array([[ [i, j] for j in incs ] for i in incs])
 
+
   def valueIteration(self, policy = None):
     newStateValues = np.zeros(self.stateValues.shape)
     newStateValues[:, :, :] = - np.inf
