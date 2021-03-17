@@ -2,6 +2,7 @@ import numpy as np
 import sys, os
 from pdb import set_trace as debugger
 
+
 sys.path.append(os.getcwd())
 
 import random as rand
@@ -56,7 +57,6 @@ class PolicyEvaluation:
   def valueIteration(self, policy = None):
     newStateValues = np.zeros(self.stateValues.shape)
     dropOffActionValue = self._dropOffActionValue()
-    debugger()
 
     for i in range(self.stateValues.shape[0]):
       for j in range(self.stateValues.shape[1]):
@@ -90,10 +90,7 @@ class PolicyEvaluation:
               actionValue = 0
 
               # Calculate action value given the next state
-              if nextStateIndex[0] in range(self.stateValues.shape[0]) and \
-                 nextStateIndex[1] in range(self.stateValues.shape[1]) and \
-                 nextStateIndex[2] in range(self.stateValues.shape[2]) and \
-                 not self._traceCrossesBorder((i, j), (nextStateIndex[0], nextStateIndex[1])):
+              if not self._traceCrossesBorder((i, j), (nextStateIndex[0], nextStateIndex[1])):
 
                 # Agent didn't move over the track boundaries
                 actionValue = self.stateValues[tuple(nextStateIndex)] - self._transitionCost
@@ -108,32 +105,74 @@ class PolicyEvaluation:
     return newStateValues
 
   def _borderCrossesMatrix(self, dv, dh):
-    res = np.zeros((self.stateValues.shape[0], self.stateValues.shape[1]))
+    res = np.zeros((self.stateValues.shape[0], self.stateValues.shape[1]), dtype=np.bool)
 
+    if dv != 0:
+      step = 1 if dv >= 0 else -1
 
+      for v in range(step, dv + step, step):
+        h = round((dh / dv) * v)
+        shPad = self._shiftArr(self.schema, -v, -h, fillWith = 0)
+        res = np.logical_or(res, (shPad == 0))
+
+    if dh != 0:
+      step = 1 if dh >= 0 else -1
+
+      for h in range(step, dh + step, step):
+        v = round((dv / dh) * h)
+        shPad = self._shiftArr(self.schema, -v, -h, fillWith = 0)
+        res = np.logical_or(res, (shPad == 0))
+
+    return res
 
   def _traceCrossesBorder(self, startPos, endPos):
+    if not endPos[0] in range(self.stateValues.shape[0]) or \
+       not endPos[1] in range(self.stateValues.shape[1]):
+
+      return True
+
     dv, dh = endPos[0] - startPos[0], endPos[1] - startPos[1]
 
     if dv != 0:
-      step = 1 if endPos[0] >= startPos[0] else -1
+      step = 1 if dv >= 0 else -1
       for v in range(startPos[0] + step, endPos[0] + step, step):
-        h = int(round((dh / dv) * (v - startPos[0]) + startPos[1]))
+        h = int(round((dh / dv) * (v - startPos[0])) + startPos[1])
 
         if self.schema[v, h] == 0: return True
 
     if dh != 0:
       step = 1 if endPos[1] >= startPos[1] else -1
       for h in range(startPos[1] + step, endPos[1] + step, step):
-        v = int(round((dv / dh) * (h - startPos[1]) + startPos[0]))
+        v = int(round((dv / dh) * (h - startPos[1])) + startPos[0])
 
         if self.schema[v, h] == 0: return True
 
     return False
 
+  def _shiftArr(self, arr, dv, dh, fillWith = np.nan):
+    result = np.copy(arr)
+
+    if dh > 0:
+        result[:, dh:] = result[:, :-dh]
+        result[:, :dh] = fillWith
+    elif dh < 0:
+        result[:, :dh] = result[:, -dh:]
+        result[:, dh:] = fillWith
+
+    if dv > 0:
+        result[dv:, :] = result[:-dv, :]
+        result[:dv, :] = fillWith
+    elif dv < 0:
+        result[:dv, :] = result[-dv:, :]
+        result[dv:, :] = fillWith
+
+    return result
+
+
   def _encodeSpeed(self, speedVector):
     return (speedVector[0] + self._speedLimit) * self._speedsCount  + \
            (speedVector[1] + self._speedLimit)
+
 
   def _decodeSpeed(self, speed):
     vSpeed = speed // self._speedsCount - self._speedLimit
@@ -176,11 +215,9 @@ class PolicyEvaluation:
 
 
 # Example of usage
-#policy = PolicyEvaluation()
+policy = PolicyEvaluation()
+r1 = policy._borderCrossesMatrix(dv, dh)
 
-#res = policy._traceCrossesBorder((14, 13), (22, 13))
-
-#debugger()
 
 # policy.bootstrap()
 # print(policy.getNextAction(0, 5, 0, 0)[0])
